@@ -14,7 +14,7 @@ The project was designed to demonstrate practical microservices, cloud deploymen
 
 ---
 
-## 🚀 Live Demo
+## Live Demo
 
 **Public Dashboard:**
 http://a17dc9406dc4d48a5a9508d0590c9787-1599414992.ap-south-1.elb.amazonaws.com
@@ -25,7 +25,7 @@ http://a17dc9406dc4d48a5a9508d0590c9787-1599414992.ap-south-1.elb.amazonaws.com
 
 ---
 
-## 📌 Project Overview
+## Project Overview
 
 OrderFlow is designed around independent backend services responsible for different parts of an order lifecycle.
 
@@ -45,130 +45,115 @@ The system uses synchronous REST communication between services and implements s
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-```text
-                     ┌──────────────────────┐
-                     │      End User        │
-                     └──────────┬───────────┘
-                                │
-                                ▼
-                     ┌──────────────────────┐
-                     │   AWS Load Balancer  │
-                     └──────────┬───────────┘
-                                │
-                                ▼
-                     ┌──────────────────────┐
-                     │ React + Nginx        │
-                     │ Operations Dashboard │
-                     └──────────┬───────────┘
-                                │
-              ┌─────────────────┼─────────────────┐
-              │                 │                 │
-              ▼                 ▼                 ▼
-      ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-      │ Order        │  │ Inventory    │  │ Fulfillment  │
-      │ Service      │  │ Service      │  │ Service      │
-      │ Spring Boot  │  │ Spring Boot  │  │ Spring Boot  │
-      │ :8081        │  │ :8082        │  │ :8083        │
-      └──────┬───────┘  └──────────────┘  └──────┬───────┘
-             │                                   │
-             └──────────────┬────────────────────┘
-                            ▼
-                   ┌──────────────────┐
-                   │ Incident Service │
-                   │ Spring Boot      │
-                   │ :8084            │
-                   └────────┬─────────┘
-                            │
-                            ▼
-                   ┌──────────────────┐
-                   │ Python Processor │
-                   │ Automated        │
-                   │ Remediation      │
-                   └──────────────────┘
+```mermaid
+flowchart TB
+    User(["End User"])
+    ELB["AWS Load Balancer"]
 
-          ┌─────────────────────────────────────┐
-          │             PostgreSQL              │
-          │                                     │
-          │ orderflow_order                     │
-          │ orderflow_inventory                 │
-          │ orderflow_fulfillment               │
-          │ orderflow_incident                  │
-          └─────────────────────────────────────┘
+    subgraph EKS["Amazon EKS · namespace: orderflow"]
+        direction TB
+        FE["React + Nginx<br/>Operations Dashboard"]
+
+        subgraph SVC["Spring Boot Microservices"]
+            direction LR
+            ORD["Order Service<br/>:8081"]
+            INV["Inventory Service<br/>:8082"]
+            FUL["Fulfillment Service<br/>:8083"]
+            INC["Incident Service<br/>:8084"]
+        end
+
+        PY["Python Processor<br/>Kubernetes CronJob"]
+        DB[("PostgreSQL<br/>orderflow_order<br/>orderflow_inventory<br/>orderflow_fulfillment<br/>orderflow_incident")]
+    end
+
+    User -->|HTTP| ELB
+    ELB --> FE
+    FE -->|"REST via Nginx proxy"| ORD
+    FE -.->|"health, incidents, metrics"| INC
+    ORD -->|"reserve / release"| INV
+    ORD -->|"create fulfillment"| FUL
+    ORD -.->|"report failure"| INC
+    FUL -.->|"report failure"| INC
+    PY -->|"REST polling and remediation"| INC
+    ORD --> DB
+    INV --> DB
+    FUL --> DB
+    INC --> DB
+
+    classDef user fill:#fff3e0,stroke:#ef6c00,color:#000
+    classDef edge fill:#e3f2fd,stroke:#1565c0,color:#000
+    classDef svc fill:#e8f5e9,stroke:#2e7d32,color:#000
+    classDef auto fill:#f3e5f5,stroke:#6a1b9a,color:#000
+    classDef data fill:#fffde7,stroke:#f9a825,color:#000
+    class User user
+    class ELB,FE edge
+    class ORD,INV,FUL,INC svc
+    class PY auto
+    class DB data
 ```
 
-### 🔄 Order Processing Flow
+### Order Processing Flow
 
-```text
-Create Order
-     │
-     ▼
-Order Service
-     │
-     ▼
-Reserve Inventory
-     │
-     ├─────────────── Failure ───────────────┐
-     │                                       │
-     ▼                                       ▼
-Inventory Reserved                    Release Previous
-     │                                Reservations
-     ▼                                       │
-Create Fulfillment                           ▼
-     │                                  Order FAILED
-     ├────────────── Failure ────────────────┘
-     │
-     ▼
-Order CONFIRMED
-     │
-     ▼
-Warehouse Processing
-     │
-     ▼
-Ready for Shipping
-     │
-     ▼
-Shipped
-     │
-     ▼
-Delivered
+```mermaid
+flowchart TD
+    A(["Create Order"]) --> B["Order Service<br/>validates and saves order"]
+    B --> C["Reserve inventory<br/>for each item"]
+    C --> D{"All items<br/>reserved?"}
+    D -- No --> R["Release previous<br/>reservations"]
+    R --> F(["Order FAILED<br/>Incident raised"])
+    D -- Yes --> G["Create fulfillment record"]
+    G --> H{"Fulfillment<br/>created?"}
+    H -- No --> R
+    H -- Yes --> I(["Order CONFIRMED"])
+    I --> J["WAREHOUSE_PROCESSING"]
+    J --> K["READY_FOR_SHIPPING"]
+    K --> L["SHIPPED<br/>tracking number generated"]
+    L --> M(["DELIVERED"])
+
+    classDef ok fill:#e8f5e9,stroke:#2e7d32,color:#000
+    classDef bad fill:#ffebee,stroke:#c62828,color:#000
+    classDef step fill:#e3f2fd,stroke:#1565c0,color:#000
+    classDef decision fill:#fff8e1,stroke:#f9a825,color:#000
+    class I,M ok
+    class F,R bad
+    class B,C,G,J,K,L step
+    class D,H decision
 ```
 
-### 🚨 Failure & Remediation Flow
+### Failure & Remediation Flow
 
-```text
-Business / Service Failure
-            │
-            ▼
-      Incident Created
-            │
-            ▼
-      Incident Service
-            │
-            ▼
-      Python Processor
-            │
-      ┌─────┴─────┐
-      │           │
-      ▼           ▼
-   Eligible     Not Eligible
-      │           │
-      ▼           └──> Skip
-Bounded Remediation
-      │
-      ▼
-Incident → MITIGATING
-      │
-      ▼
-Retry Count Updated
+```mermaid
+flowchart TD
+    A(["Business / service failure"]) --> B["Incident created<br/>status: OPEN"]
+    B --> C["Incident Service<br/>source of truth for state and retry limits"]
+    C --> D["Python Processor<br/>polls open incidents via REST"]
+    D --> E["Normalize incident data"]
+    E --> F{"Eligible for<br/>remediation?<br/>risk rules and retry limit"}
+    F -- No --> G(["Skip incident"])
+    F -- Yes --> H["Bounded remediation attempt"]
+    H --> I["Incident status → MITIGATING"]
+    I --> J["Retry count updated<br/>through Incident Service API"]
+    J --> K["Metrics exposed<br/>via Actuator and Micrometer"]
+
+    classDef start fill:#ffebee,stroke:#c62828,color:#000
+    classDef svc fill:#e8f5e9,stroke:#2e7d32,color:#000
+    classDef auto fill:#f3e5f5,stroke:#6a1b9a,color:#000
+    classDef decision fill:#fff8e1,stroke:#f9a825,color:#000
+    classDef end1 fill:#eceff1,stroke:#546e7a,color:#000
+    class A start
+    class B,C,I,J,K svc
+    class D,E,H auto
+    class F decision
+    class G end1
 ```
 
 The Python processor does **not** directly modify database state. It communicates with the Incident Service through its REST API, while the Incident Service remains the source of truth for incident state and retry limits.
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 ### 1. Microservices Architecture
 
@@ -207,14 +192,14 @@ The backend is divided into four independently deployable Spring Boot services:
 
 Fulfillment records progress through controlled states:
 
-```text
-WAREHOUSE_PROCESSING
-        ↓
-READY_FOR_SHIPPING
-        ↓
-SHIPPED
-        ↓
-DELIVERED
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> WAREHOUSE_PROCESSING: order confirmed
+    WAREHOUSE_PROCESSING --> READY_FOR_SHIPPING
+    READY_FOR_SHIPPING --> SHIPPED: tracking number generated
+    SHIPPED --> DELIVERED
+    DELIVERED --> [*]
 ```
 
 Invalid state transitions are rejected. A tracking number is generated when an order enters the shipping stage.
@@ -223,16 +208,22 @@ Invalid state transitions are rejected. A tracking number is generated when an o
 
 Order processing uses simplified synchronous compensation. For example:
 
-```text
-Order Created
-     ↓
-Reserve Product A ✓
-     ↓
-Reserve Product B ✗
-     ↓
-Release Product A
-     ↓
-Order FAILED
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O as Order Service
+    participant I as Inventory Service
+    participant N as Incident Service
+
+    O->>I: Reserve Product A
+    I-->>O: Reserved
+    O->>I: Reserve Product B
+    I-->>O: Insufficient stock
+    Note over O,I: Compensation (best-effort, synchronous)
+    O->>I: Release Product A
+    I-->>O: Released
+    O->>N: Report failure
+    Note over O: Order marked FAILED
 ```
 
 This prevents successfully reserved inventory from remaining locked when a later reservation fails.
@@ -283,7 +274,7 @@ Remediation attempts are limited to prevent uncontrolled retries. The Kubernetes
 
 ---
 
-## 🔐 Security
+## Security
 
 OrderFlow implements application-level security using:
 
@@ -320,7 +311,7 @@ Audit logs capture security-related actions such as successful and failed logins
 
 ---
 
-## 📊 Observability
+## Observability
 
 Spring Boot Actuator is enabled across the backend services.
 
@@ -343,36 +334,46 @@ The React operations dashboard periodically polls service health, incidents and 
 
 ---
 
-## ☁️ AWS Deployment
+## AWS Deployment
 
 OrderFlow is deployed on Amazon Web Services using **Amazon EKS**.
 
-```text
-                    AWS
-                     │
-             ┌───────▼────────┐
-             │      EKS       │
-             │ orderflow NS   │
-             └───────┬────────┘
-                     │
-       ┌─────────────┼─────────────┐
-       │             │             │
-       ▼             ▼             ▼
-    Frontend      Backend       PostgreSQL
-       │          Services          │
-       │             │              │
-       │      ┌──────┼──────┐       │
-       │      │      │      │       │
-       │    Order Inventory Fulfillment
-       │             │
-       │             ▼
-       │        Incident
-       │             │
-       │             ▼
-       │       Python CronJob
-       │
-       ▼
- AWS Load Balancer
+```mermaid
+flowchart LR
+    U(["User"]) --> ELB["AWS Load Balancer<br/>public"]
+
+    subgraph AWS["AWS · ap-south-1"]
+        direction LR
+        ELB
+        ECR[("Amazon ECR<br/>container images")]
+        IAM["IAM + GitHub OIDC"]
+
+        subgraph VPC["Amazon VPC"]
+            subgraph EKS["Amazon EKS · namespace: orderflow<br/>EC2 worker nodes"]
+                direction TB
+                FE["Frontend<br/>React + Nginx<br/>LoadBalancer"]
+                BE["Backend Services<br/>Order · Inventory · Fulfillment · Incident<br/>ClusterIP"]
+                PG[("PostgreSQL<br/>ClusterIP")]
+                CJ["Python CronJob"]
+            end
+            EBS[("Amazon EBS<br/>persistent volume")]
+        end
+    end
+
+    ELB --> FE
+    FE --> BE
+    BE --> PG
+    CJ --> BE
+    PG --- EBS
+    ECR -. "image pull" .-> EKS
+    IAM -. "auth" .-> ECR
+
+    classDef pub fill:#e3f2fd,stroke:#1565c0,color:#000
+    classDef priv fill:#e8f5e9,stroke:#2e7d32,color:#000
+    classDef store fill:#fffde7,stroke:#f9a825,color:#000
+    class ELB,FE pub
+    class BE,CJ priv
+    class PG,EBS,ECR store
 ```
 
 ### AWS Components
@@ -397,7 +398,7 @@ Only the frontend is publicly exposed through a `LoadBalancer` service. Backend 
 
 ---
 
-## ☸️ Kubernetes
+## Kubernetes
 
 Kubernetes resources include:
 
@@ -417,7 +418,7 @@ The Python processor runs periodically using a Kubernetes CronJob. PostgreSQL us
 
 ---
 
-## 🐳 Docker
+## Docker
 
 All application components are containerized.
 
@@ -427,7 +428,7 @@ All application components are containerized.
 
 ---
 
-## 🔄 CI/CD
+## CI/CD
 
 GitHub Actions workflows are separated by application component:
 
@@ -441,22 +442,23 @@ GitHub Actions workflows are separated by application component:
 
 ### Backend Pipeline
 
-```text
-Git Push
-   ↓
-GitHub Actions
-   ↓
-Maven Build & Tests
-   ↓
-Docker Build
-   ↓
-Amazon ECR
-   ↓
-Kubernetes Manifest Update
-   ↓
-Amazon EKS
-   ↓
-Rollout Verification
+```mermaid
+flowchart LR
+    A(["Git push"]) --> B["GitHub Actions"]
+    B --> C["Maven build<br/>and tests"]
+    C --> D["Docker build<br/>tagged with commit SHA"]
+    D --> E[("Amazon ECR")]
+    E --> F["Kubernetes<br/>manifest update<br/>Kustomize"]
+    F --> G["Amazon EKS<br/>deploy"]
+    G --> H(["Rollout<br/>verification"])
+    B -. "OIDC, no long-lived keys" .-> AWS["AWS IAM"]
+
+    classDef ci fill:#e3f2fd,stroke:#1565c0,color:#000
+    classDef aws fill:#fff3e0,stroke:#ef6c00,color:#000
+    classDef ok fill:#e8f5e9,stroke:#2e7d32,color:#000
+    class B,C,D ci
+    class E,F,G,AWS aws
+    class H ok
 ```
 
 ### Image Versioning
@@ -473,7 +475,7 @@ GitHub Actions authenticates with AWS using **OIDC** rather than storing long-li
 
 ---
 
-## 🧪 Testing
+## Testing
 
 The project includes unit and controller-level tests across the Spring Boot services, covering:
 
@@ -496,7 +498,7 @@ The backend observability implementation was also verified with the service test
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 | Category | Technologies |
 |---|---|
@@ -510,7 +512,7 @@ The backend observability implementation was also verified with the service test
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 OrderFlow/
@@ -551,7 +553,7 @@ OrderFlow/
 
 ---
 
-## 🚀 Running Locally
+## Running Locally
 
 ### Prerequisites
 
@@ -601,7 +603,7 @@ Backend services:
 
 ---
 
-## 🔑 Example Workflow
+## Example Workflow
 
 ### 1. Register
 
@@ -664,7 +666,7 @@ The Python processor can then identify the incident for bounded remediation.
 
 ---
 
-## ⚠️ Design Limitations
+## Design Limitations
 
 OrderFlow intentionally uses a relatively lightweight architecture. Current limitations include:
 
@@ -684,7 +686,7 @@ These limitations are documented intentionally rather than hidden.
 
 ---
 
-## 🎯 Project Objectives
+## Project Objectives
 
 The project demonstrates practical understanding of:
 
@@ -709,7 +711,7 @@ The project demonstrates practical understanding of:
 
 ---
 
-## 👨‍💻 Author
+## Author
 
 **Ganesh S**
 Computer Science & Engineering
@@ -718,6 +720,6 @@ GitHub: [ganesh-2212](https://github.com/ganesh-2212)
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License.
