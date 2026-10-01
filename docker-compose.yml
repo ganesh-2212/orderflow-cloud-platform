@@ -1,0 +1,167 @@
+version: '3.8'
+
+networks:
+  orderflow_net:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: orderflow-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-orderflow_order}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/postgres-init.sh
+    networks:
+      - orderflow_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  order-service:
+    build:
+      context: ./backend/order-service
+    container_name: order-service
+    ports:
+      - "8081:8081"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=orderflow_order
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - INVENTORY_SERVICE_URL=http://inventory-service:8082
+      - INVENTORY_SERVICE_TIMEOUT_MS=5000
+      - FULFILLMENT_SERVICE_URL=http://fulfillment-service:8083
+      - FULFILLMENT_SERVICE_TIMEOUT_MS=5000
+      - INCIDENT_SERVICE_URL=http://incident-service:8084
+      - INCIDENT_SERVICE_TIMEOUT_MS=5000
+      - JWT_SECRET=${JWT_SECRET:-[REDACTED]}
+      - JWT_EXPIRATION_MS=${JWT_EXPIRATION_MS:-86400000}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-[REDACTED]}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - orderflow_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  inventory-service:
+    build:
+      context: ./backend/inventory-service
+    container_name: inventory-service
+    ports:
+      - "8082:8082"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=orderflow_inventory
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - orderflow_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fulfillment-service:
+    build:
+      context: ./backend/fulfillment-service
+    container_name: fulfillment-service
+    ports:
+      - "8083:8083"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=orderflow_fulfillment
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - INCIDENT_SERVICE_URL=http://incident-service:8084
+      - INCIDENT_SERVICE_TIMEOUT_MS=5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - orderflow_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  incident-service:
+    build:
+      context: ./backend/incident-service
+    container_name: incident-service
+    ports:
+      - "8084:8084"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=orderflow_incident
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - orderflow_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_ORDER_SERVICE_URL=${VITE_ORDER_SERVICE_URL:-http://localhost:8081}
+        - VITE_INVENTORY_SERVICE_URL=${VITE_INVENTORY_SERVICE_URL:-http://localhost:8082}
+        - VITE_FULFILLMENT_SERVICE_URL=${VITE_FULFILLMENT_SERVICE_URL:-http://localhost:8083}
+        - VITE_INCIDENT_SERVICE_URL=${VITE_INCIDENT_SERVICE_URL:-http://localhost:8084}
+    container_name: frontend
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_ORDER_SERVICE_URL=${VITE_ORDER_SERVICE_URL:-http://localhost:8081}
+      - VITE_INVENTORY_SERVICE_URL=${VITE_INVENTORY_SERVICE_URL:-http://localhost:8082}
+      - VITE_FULFILLMENT_SERVICE_URL=${VITE_FULFILLMENT_SERVICE_URL:-http://localhost:8083}
+      - VITE_INCIDENT_SERVICE_URL=${VITE_INCIDENT_SERVICE_URL:-http://localhost:8084}
+    networks:
+      - orderflow_net
+
+  python-processor:
+    build:
+      context: ./python-processor
+    container_name: python-processor
+    profiles:
+      - manual
+    environment:
+      - INCIDENT_SERVICE_URL=http://incident-service:8084
+      - PROCESSOR_TIMEOUT_SECONDS=${PROCESSOR_TIMEOUT_SECONDS:-60}
+      - MAX_REMEDIATION_ATTEMPTS=${MAX_REMEDIATION_ATTEMPTS:-3}
+      - PROCESSOR_BATCH_SIZE=${PROCESSOR_BATCH_SIZE:-10}
+      - PROCESSOR_DRY_RUN=${PROCESSOR_DRY_RUN:-true}
+    networks:
+      - orderflow_net
+
+volumes:
+  postgres-data:

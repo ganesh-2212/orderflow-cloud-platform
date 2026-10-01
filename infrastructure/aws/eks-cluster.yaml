@@ -1,0 +1,29 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: orderflow-eks
+  region: ap-south-1
+  version: "1.33"
+
+availabilityZones:
+  - ap-south-1a
+  - ap-south-1b
+
+managedNodeGroups:
+  - name: orderflow-ng
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 2
+    volumeSize: 20
+    privateNetworking: false
+    labels:
+      workload: orderflow
+    tags:
+      Project: OrderFlow
+      Environment: learning
+
+vpc:
+  nat:
+    gateway: Disable

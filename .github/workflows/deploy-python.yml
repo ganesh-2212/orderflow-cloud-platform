@@ -1,0 +1,55 @@
+name: Deploy Python Processor
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "python-processor/**"
+      - ".github/workflows/deploy-python.yml"
+
+env:
+  AWS_REGION: "ap-south-1"
+  EKS_CLUSTER: "orderflow-eks"
+  ECR_REGISTRY: "633212682415.dkr.ecr.ap-south-1.amazonaws.com"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy Python CronJob
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::633212682415:role/GitHubActions_OrderFlow_Deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Python Processor
+        run: |
+          cd python-processor
+          docker build -t ${{ env.ECR_REGISTRY }}/orderflow-python-processor:${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/orderflow-python-processor:latest .
+          docker push ${{ env.ECR_REGISTRY }}/orderflow-python-processor:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/orderflow-python-processor:latest
+
+      - name: Update Kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to EKS
+        run: |
+          mkdir kustomize-temp
+          cp infrastructure/kubernetes/09-python-processor.yaml kustomize-temp/
+          cd kustomize-temp
+          kustomize create --resources 09-python-processor.yaml
+          kustomize edit set image 633212682415.dkr.ecr.ap-south-1.amazonaws.com/orderflow-python-processor=633212682415.dkr.ecr.ap-south-1.amazonaws.com/orderflow-python-processor:${{ github.sha }}
+          kustomize build . | kubectl apply -f -

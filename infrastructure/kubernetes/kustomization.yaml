@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 01-config.yaml
+  - 02-secrets.yaml
+  - 03-postgres.yaml
+  - 04-order-service.yaml
+  - 05-inventory-service.yaml
+  - 06-fulfillment-service.yaml
+  - 07-incident-service.yaml
+  - 08-frontend.yaml
+  - 09-python-processor.yaml

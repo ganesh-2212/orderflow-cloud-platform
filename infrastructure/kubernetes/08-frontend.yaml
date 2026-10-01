@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: orderflow
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: 633212682415.dkr.ecr.ap-south-1.amazonaws.com/orderflow-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          # NOTE: VITE_* variables are injected at BUILD time for this React app.
+          # Supplying them here as env vars has no effect on the runtime JS bundle.
+          # See README.md for instructions on handling frontend configuration.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: orderflow
+spec:
+  type: LoadBalancer
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80

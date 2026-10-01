@@ -1,0 +1,13 @@
+package com.orderflow.incident.entity;
+
+public enum IncidentCategory {
+    SERVICE_UNAVAILABLE,
+    TIMEOUT,
+    VALIDATION_FAILURE,
+    DATABASE_ERROR,
+    INVENTORY_FAILURE,
+    FULFILLMENT_FAILURE,
+    SECURITY_FINDING,
+    PERFORMANCE_DEGRADATION,
+    UNKNOWN
+}

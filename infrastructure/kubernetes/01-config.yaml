@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orderflow-config
+  namespace: orderflow
+data:
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  # Service URLs using Kubernetes DNS
+  INVENTORY_SERVICE_URL: http://inventory-service:8082
+  INVENTORY_SERVICE_TIMEOUT_MS: "5000"
+  FULFILLMENT_SERVICE_URL: http://fulfillment-service:8083
+  FULFILLMENT_SERVICE_TIMEOUT_MS: "5000"
+  INCIDENT_SERVICE_URL: http://incident-service:8084
+  INCIDENT_SERVICE_TIMEOUT_MS: "5000"
+  PROCESSOR_TIMEOUT_SECONDS: "60"
+  MAX_REMEDIATION_ATTEMPTS: "3"
+  PROCESSOR_BATCH_SIZE: "10"
+  PROCESSOR_DRY_RUN: "false"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-script
+  namespace: orderflow
+data:
+  postgres-init.sh: |
+    #!/bin/bash
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+        CREATE DATABASE orderflow_inventory;
+        CREATE DATABASE orderflow_fulfillment;
+        CREATE DATABASE orderflow_incident;
+    EOSQL
