@@ -39,3 +39,7 @@ venv/
 # Logs
 *.log
 logs/
+
+# Docker image archives
+*.tar
+*.tar.gz
