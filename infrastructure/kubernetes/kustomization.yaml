@@ -4,7 +4,6 @@ kind: Kustomization
 resources:
   - 00-namespace.yaml
   - 01-config.yaml
-  - 02-secrets.yaml
   - 03-postgres.yaml
   - 04-order-service.yaml
   - 05-inventory-service.yaml
