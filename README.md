@@ -97,37 +97,52 @@ flowchart TB
 ### Order Processing Flow
 
 ```mermaid
-flowchart LR
-    U(["Client"]) --> O1
+flowchart TB
+    START(["Client submits order"])
 
-    subgraph EKS["Amazon EKS - namespace: orderflow"]
-        direction LR
-
-        subgraph MAIN["Order Workflow"]
-            direction LR
-            O1["Order Service<br/>authenticate, validate,<br/>create order"]
-            I1["Inventory Service<br/>reserve stock<br/>item by item"]
-            D1{"All items<br/>reserved?"}
-            F1["Fulfillment Service<br/>create fulfillment record"]
-            D2{"Fulfillment<br/>created?"}
-            OK["Order CONFIRMED"]
-            LC["Fulfillment lifecycle<br/>WAREHOUSE_PROCESSING<br/>READY_FOR_SHIPPING<br/>SHIPPED<br/>DELIVERED"]
-        end
-
-        subgraph FAILP["Failure Handling"]
-            direction LR
-            C1["Inventory Service<br/>release earlier reservations"]
-            FL["Order FAILED"]
-            N1["Incident Service<br/>incident OPEN"]
-        end
+    subgraph ORDER["Order Service"]
+        direction TB
+        O1["Authenticate request<br/>JWT and role check"]
+        O2["Validate payload<br/>and create order"]
+        O3{"All items<br/>reserved?"}
+        O4{"Fulfillment<br/>created?"}
+        O5["Mark order CONFIRMED"]
+        O6["Mark order FAILED"]
     end
 
-    O1 --> I1 --> D1
-    D1 -->|"Yes"| F1 --> D2
-    D2 -->|"Yes"| OK --> LC
-    D1 -->|"No"| C1
-    D2 -->|"No"| C1
-    C1 --> FL --> N1
+    subgraph INVENTORY["Inventory Service"]
+        direction TB
+        I1["Reserve stock<br/>item by item"]
+        I2["Release earlier reservations<br/>compensation"]
+    end
+
+    subgraph FULFILLMENT["Fulfillment Service"]
+        direction TB
+        F1["Create fulfillment record"]
+        F2["WAREHOUSE_PROCESSING"]
+        F3["READY_FOR_SHIPPING"]
+        F4["SHIPPED<br/>tracking number generated"]
+        F5["DELIVERED"]
+    end
+
+    subgraph INCIDENT["Incident Service"]
+        direction TB
+        N1["Create incident<br/>status OPEN"]
+    end
+
+    START --> O1 --> O2
+    O2 -->|"reserve request"| I1
+    I1 --> O3
+    O3 -->|"Yes"| F1
+    O3 -->|"No"| I2
+    F1 --> O4
+    O4 -->|"Yes"| O5
+    O4 -->|"No"| I2
+    O5 --> F2 --> F3 --> F4 --> F5
+    I2 --> O6
+    O6 -->|"report failure"| N1
+    F5 --> DONE(["Order completed"])
+    N1 --> FAIL(["Order closed as failed"])
 
     classDef order fill:#e3f2fd,stroke:#1565c0,color:#000
     classDef inv fill:#e8f5e9,stroke:#2e7d32,color:#000
@@ -135,56 +150,60 @@ flowchart LR
     classDef bad fill:#ffebee,stroke:#c62828,color:#000
     classDef decision fill:#fff8e1,stroke:#f9a825,color:#000
     classDef terminal fill:#eceff1,stroke:#546e7a,color:#000
-    class O1,OK order
+    class O1,O2,O5 order
     class I1 inv
-    class F1,LC ful
-    class C1,FL,N1 bad
-    class D1,D2 decision
-    class U terminal
+    class F1,F2,F3,F4,F5 ful
+    class O6,I2,N1 bad
+    class O3,O4 decision
+    class START,DONE,FAIL terminal
 ```
 
 ### Failure & Remediation Flow
 
 ```mermaid
-flowchart LR
-    subgraph EKS["Amazon EKS - namespace: orderflow"]
-        direction LR
-
-        subgraph BACKEND["Backend Services"]
-            direction TB
-            SRC["Order, Inventory and<br/>Fulfillment Services<br/>detect a failure"]
-            INC["Incident Service<br/>incident created: OPEN"]
-            LIM{"Retry limit<br/>reached?"}
-            MIT["Status: MITIGATING<br/>retry count + 1"]
-            REJ["Reject request"]
-            MET["Actuator and<br/>Micrometer metrics"]
-        end
-
-        subgraph CRON["Python Processor - Kubernetes CronJob"]
-            direction TB
-            P1["Scheduled run starts"]
-            P2["Poll open incidents"]
-            P3["Normalize data and<br/>apply risk rules"]
-            P5{"Eligible for<br/>remediation?"}
-            SKIP["Skip incident"]
-            P7["Request bounded<br/>remediation"]
-            P8["Record result,<br/>continue with next"]
-        end
+flowchart TB
+    subgraph SOURCE["Failure Sources"]
+        direction TB
+        S1["Order, Inventory or Fulfillment Service<br/>detects a failure"]
     end
 
-    SRC --> INC
+    subgraph INCSVC["Incident Service - source of truth"]
+        direction TB
+        C1["Create incident<br/>status OPEN"]
+        C2["Return open incidents"]
+        C3{"Retry limit<br/>reached?"}
+        C4["Set status MITIGATING<br/>increment retry count"]
+        C5["Reject remediation request"]
+        C6["Update metrics<br/>orderflow.incidents.*"]
+    end
+
+    subgraph PROC["Python Processor - Kubernetes CronJob"]
+        direction TB
+        P1["Scheduled run starts"]
+        P2["Poll open incidents<br/>via REST"]
+        P3["Normalize incident data"]
+        P4["Classify eligibility and apply<br/>deterministic risk rules"]
+        P5{"Eligible for<br/>remediation?"}
+        P6["Skip incident"]
+        P7["Request bounded remediation<br/>via REST"]
+        P8["Record result and continue<br/>with next incident"]
+    end
+
+    S1 --> C1
+    C1 -.->|"stored until polled"| C2
     P1 --> P2
-    P2 -->|"REST: open incidents"| INC
-    INC -->|"incident list"| P3
-    P3 --> P5
-    P5 -->|"No"| SKIP --> P8
+    P2 -->|"GET open incidents"| C2
+    C2 -->|"incident list"| P3
+    P3 --> P4 --> P5
+    P5 -->|"No"| P6
     P5 -->|"Yes"| P7
-    P7 -->|"REST"| LIM
-    LIM -->|"No"| MIT
-    LIM -->|"Yes"| REJ
-    MIT -.-> MET
-    MIT -->|"updated state"| P8
-    REJ -->|"rejected"| P8
+    P7 -->|"remediation request"| C3
+    C3 -->|"No"| C4
+    C3 -->|"Yes"| C5
+    C4 --> C6
+    C4 -->|"updated state"| P8
+    C5 -->|"rejected"| P8
+    P6 --> P8
     P8 -.->|"next incident"| P3
 
     classDef src fill:#ffebee,stroke:#c62828,color:#000
@@ -192,11 +211,11 @@ flowchart LR
     classDef auto fill:#f3e5f5,stroke:#6a1b9a,color:#000
     classDef decision fill:#fff8e1,stroke:#f9a825,color:#000
     classDef neutral fill:#eceff1,stroke:#546e7a,color:#000
-    class SRC src
-    class INC,MIT,MET svc
-    class REJ,SKIP neutral
-    class P1,P2,P3,P7,P8 auto
-    class LIM,P5 decision
+    class S1 src
+    class C1,C2,C4,C6 svc
+    class C5,P6 neutral
+    class P1,P2,P3,P4,P7,P8 auto
+    class C3,P5 decision
 ```
 
 The Python processor does **not** directly modify database state. It communicates with the Incident Service through its REST API, while the Incident Service remains the source of truth for incident state and retry limits.
